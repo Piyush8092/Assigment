@@ -62,69 +62,38 @@ function isValidDate(dateString) {
   return date instanceof Date && !isNaN(date);
 }
 
-// Helper function to update streak logic with improved accuracy
+// Helper function to update streak logic - FIXED VERSION
 function updateStreakLogic() {
-  const today = getTodayDate();
-  const yesterday = getYesterdayDate();
+  // Always recalculate from scratch to ensure accuracy
+  const calculated = recalculateStreak();
+  streakData.currentStreak = calculated.currentStreak;
+  streakData.longestStreak = Math.max(streakData.longestStreak, calculated.longestStreak);
 
-  // First check-in ever
-  if (streakData.checkInDates.length === 1) {
-    streakData.currentStreak = 1;
-    streakData.longestStreak = Math.max(streakData.longestStreak, 1);
-    return;
-  }
-
-  const lastCheckIn = streakData.lastCheckInDate;
-
-  if (lastCheckIn === yesterday) {
-    // Consecutive day - increment streak
-    streakData.currentStreak += 1;
-    streakData.longestStreak = Math.max(streakData.longestStreak, streakData.currentStreak);
-  } else if (lastCheckIn === today) {
-    // Already checked in today - no change needed
-    return;
-  } else {
-    // Gap in check-ins - calculate missed days and reset streak
-    const daysMissed = daysBetween(today, lastCheckIn) - 1;
-
-    if (daysMissed > 0) {
-      // Add missed days to tracking (but not today)
-      const missedDates = [];
-      for (let i = 1; i <= daysMissed; i++) {
-        const missedDate = new Date(lastCheckIn + 'T00:00:00');
-        missedDate.setDate(missedDate.getDate() + i);
-        const year = missedDate.getFullYear();
-        const month = String(missedDate.getMonth() + 1).padStart(2, '0');
-        const day = String(missedDate.getDate()).padStart(2, '0');
-        const missedDateStr = `${year}-${month}-${day}`;
-
-        if (missedDateStr !== today && !streakData.missedDays.includes(missedDateStr)) {
-          missedDates.push(missedDateStr);
-        }
-      }
-      streakData.missedDays.push(...missedDates);
-    }
-
-    // Reset current streak to 1 (today's check-in)
-    streakData.currentStreak = 1;
-  }
+  console.log(`📊 Streak updated: Current=${streakData.currentStreak}, Longest=${streakData.longestStreak}`);
 }
 
-// Helper function to calculate current streak from scratch (for validation)
+// Helper function to calculate current streak from scratch - FIXED VERSION
 function recalculateStreak() {
   if (streakData.checkInDates.length === 0) {
+    console.log('📊 No check-ins found, streak = 0');
     return { currentStreak: 0, longestStreak: 0 };
   }
 
   // Sort check-in dates
   const sortedDates = [...streakData.checkInDates].sort();
   const today = getTodayDate();
+  const yesterday = getYesterdayDate();
 
-  let currentStreak = 0;
+  console.log(`📊 Calculating streak from ${sortedDates.length} check-ins: [${sortedDates.join(', ')}]`);
+  console.log(`📊 Today: ${today}, Yesterday: ${yesterday}`);
+
   let longestStreak = 0;
-  let tempStreak = 0;
+  let currentStreak = 0;
 
-  // Calculate streaks by checking consecutive dates
+  // Find all consecutive streaks
+  let tempStreak = 1;
+  let streaks = [];
+
   for (let i = 0; i < sortedDates.length; i++) {
     if (i === 0) {
       tempStreak = 1;
@@ -134,26 +103,47 @@ function recalculateStreak() {
       const dayDiff = (currDate - prevDate) / (24 * 60 * 60 * 1000);
 
       if (dayDiff === 1) {
+        // Consecutive day
         tempStreak++;
       } else {
-        longestStreak = Math.max(longestStreak, tempStreak);
+        // Gap found, save current streak and start new one
+        streaks.push({
+          length: tempStreak,
+          endDate: sortedDates[i - 1]
+        });
         tempStreak = 1;
       }
     }
   }
 
-  longestStreak = Math.max(longestStreak, tempStreak);
+  // Don't forget the last streak
+  streaks.push({
+    length: tempStreak,
+    endDate: sortedDates[sortedDates.length - 1]
+  });
 
-  // Current streak is only valid if it includes today or yesterday
-  const lastCheckIn = sortedDates[sortedDates.length - 1];
-  const yesterday = getYesterdayDate();
+  // Find longest streak
+  longestStreak = Math.max(...streaks.map(s => s.length));
 
-  if (lastCheckIn === today || lastCheckIn === yesterday) {
-    currentStreak = tempStreak;
+  // Find current streak (must end today or yesterday to be active)
+  const lastStreak = streaks[streaks.length - 1];
+  const lastCheckIn = lastStreak.endDate;
+
+  if (lastCheckIn === today) {
+    // Streak includes today
+    currentStreak = lastStreak.length;
+    console.log(`📊 Active streak ending today: ${currentStreak} days`);
+  } else if (lastCheckIn === yesterday) {
+    // Streak ended yesterday, still active (user can continue today)
+    currentStreak = lastStreak.length;
+    console.log(`📊 Active streak ending yesterday: ${currentStreak} days (can continue today)`);
   } else {
+    // Streak is broken (last check-in was more than 1 day ago)
     currentStreak = 0;
+    console.log(`📊 Streak broken - last check-in was ${lastCheckIn}, more than 1 day ago`);
   }
 
+  console.log(`📊 Final calculation: Current=${currentStreak}, Longest=${longestStreak}`);
   return { currentStreak, longestStreak };
 }
 
@@ -205,7 +195,7 @@ function validateStreakData() {
 
   // Update last check-in date
   if (streakData.checkInDates.length > 0) {
-    streakData.lastCheckInDate = Math.max(...streakData.checkInDates);
+    streakData.lastCheckInDate = streakData.checkInDates[streakData.checkInDates.length - 1];
   }
 }
 
@@ -262,15 +252,25 @@ app.post('/check-in', (req, res) => {
   });
 });
 
-// GET /streak - Get current streak information
+// GET /streak - Get current streak information with validation
 app.get('/streak', (req, res) => {
-  res.json({
+  console.log('📊 GET /streak - Validating streak data...');
+
+  // Always validate and recalculate to ensure accuracy
+  validateStreakData();
+
+  const response = {
     currentStreak: streakData.currentStreak,
     longestStreak: streakData.longestStreak,
     lastCheckInDate: streakData.lastCheckInDate,
     totalCheckIns: streakData.checkInDates.length,
-    canCheckInToday: !streakData.checkInDates.includes(getTodayDate())
-  });
+    canCheckInToday: !streakData.checkInDates.includes(getTodayDate()),
+    checkInDates: streakData.checkInDates, // Include for debugging
+    isNewRecord: streakData.currentStreak === streakData.longestStreak && streakData.currentStreak > 1
+  };
+
+  console.log('📊 Streak response:', response);
+  res.json(response);
 });
 
 // GET /missed-days - Get missed days in the past 30 days
@@ -299,6 +299,61 @@ app.get('/calendar', (req, res) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Test endpoint to simulate check-ins on specific dates (for debugging)
+app.post('/test-checkin', (req, res) => {
+  const { date } = req.body;
+
+  if (!date || !isValidDate(date)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid date format. Use YYYY-MM-DD'
+    });
+  }
+
+  // Add the test check-in
+  if (!streakData.checkInDates.includes(date)) {
+    streakData.checkInDates.push(date);
+    streakData.checkInDates.sort(); // Keep sorted
+
+    // Update last check-in date
+    streakData.lastCheckInDate = streakData.checkInDates[streakData.checkInDates.length - 1];
+
+    // Recalculate streaks
+    updateStreakLogic();
+
+    console.log(`🧪 Test check-in added for ${date}`);
+  }
+
+  res.json({
+    success: true,
+    message: `Test check-in added for ${date}`,
+    currentStreak: streakData.currentStreak,
+    longestStreak: streakData.longestStreak,
+    lastCheckInDate: streakData.lastCheckInDate,
+    totalCheckIns: streakData.checkInDates.length,
+    checkInDates: streakData.checkInDates
+  });
+});
+
+// Test endpoint to reset all data (for debugging)
+app.post('/test-reset', (req, res) => {
+  streakData = {
+    currentStreak: 0,
+    longestStreak: 0,
+    lastCheckInDate: null,
+    checkInDates: [],
+    missedDays: []
+  };
+
+  console.log('🧪 All streak data reset');
+
+  res.json({
+    success: true,
+    message: 'All streak data reset',
+    streakData: streakData
+  });
 });
 
 // Start server on all interfaces to allow emulator access
